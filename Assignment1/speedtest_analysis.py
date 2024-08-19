@@ -6,8 +6,6 @@ import warnings
 from scapy.all import *
 from scapy.layers.inet import IP, TCP
 
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
 server_ip = "61.246.223.11"
 tcp_port = 443
 
