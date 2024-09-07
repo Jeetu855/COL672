@@ -107,6 +107,14 @@ int main() {
       }
       buffer[bytes_from_client] = '\0';
 
+      // when client just presses enter
+
+      if (buffer[0] == '\n' || buffer[0] == '\0') {
+        std::cout << "Client sent an empty line, closing connection"
+                  << std::endl;
+        break;
+      }
+
       int offset = strtol(buffer, NULL, 10); // converting to int with base 10
       std::cout << "Received offset: " << offset << std::endl;
 
