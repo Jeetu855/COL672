@@ -1,8 +1,9 @@
-
 /* srv.c */
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <fstream>
 #include <iostream>
+#include <jsoncpp/json/json.h>
 #include <netinet/in.h>
 #include <sstream>
 #include <stdio.h>
@@ -13,18 +14,25 @@
 #include <unistd.h>
 #include <vector>
 
-#define PORT 8001
 #define BUFFER_SIZE 4096
 #define FILE_BUFFER 4096
 
 int main() {
   int s, c, fd;
   socklen_t addrlen;
-  std::vector<std::string> words;
-
+  std::vector<std::string> words; // csv file ke words ke liye
   char buffer[BUFFER_SIZE];
 
-  fd = open("example.txt", O_RDONLY);
+  std::ifstream config_file("config.json", std::ifstream::binary);
+  Json::Value config; // need a stream object to read into this
+  config_file >> config;
+
+  std::string IP = config["server_ip"].asString();
+  int PORT = config["server_port"].asInt();
+  int PACKET_SIZE = config["p"].asInt();
+  int MAX_WORDS = config["k"].asInt();
+
+  fd = open("words.csv", O_RDONLY);
   if (fd == -1) {
     std::cout << "open() error\n";
     return -1;
@@ -44,17 +52,13 @@ int main() {
   }
   close(fd);
 
-  std::istringstream iss(
-      file_content); // creating stream object 'iss' from a file
+  std::istringstream stream_of_file(file_content);
   std::string token;
 
-  for (; std::getline(iss, token, ',');) {
-    if (token ==
-        "EOF") { // This reads data from the input stream (iss) into the string
-                 // token, using a comma (,) as the delimiter.
-      break;
+  while (std::getline(stream_of_file, token, ',')) {
+    if (token != "EOF") {
+      words.push_back(token);
     }
-    words.push_back(token);
   }
 
   struct sockaddr_in srv, client;
@@ -68,7 +72,7 @@ int main() {
   }
 
   srv.sin_family = AF_INET;
-  srv.sin_addr.s_addr = INADDR_ANY;
+  srv.sin_addr.s_addr = inet_addr(IP.c_str());
   srv.sin_port = htons(PORT);
 
   if (bind(s, (struct sockaddr *)&srv, sizeof(srv)) != 0) {
@@ -83,7 +87,7 @@ int main() {
     return -1;
   }
 
-  std::cout << "Listening on 0.0.0.0:" << PORT << std::endl;
+  std::cout << "Listening on " << IP << ":" << PORT << "\n";
 
   while (1) {
     addrlen = sizeof(client);
@@ -93,13 +97,13 @@ int main() {
       close(s);
       return -1;
     }
-    std::cout << "Client connected" << std::endl;
+    std::cout << "Client connected" << "\n";
 
     while (1) {
       ssize_t bytes_from_client = read(c, buffer, BUFFER_SIZE - 1);
       if (bytes_from_client <= 0) {
         if (bytes_from_client == 0) {
-          std::cout << "Client disconnected" << std::endl;
+          std::cout << "Client disconnected" << "\n";
         } else {
           std::cout << "read() error\n";
         }
@@ -107,39 +111,44 @@ int main() {
       }
       buffer[bytes_from_client] = '\0';
 
-      // when client just presses enter
-
-      if (buffer[0] == '\n' || buffer[0] == '\0') {
-        std::cout << "Client sent an empty line, closing connection"
-                  << std::endl;
-        break;
-      }
-
-      int offset = strtol(buffer, NULL, 10); // converting to int with base 10
-      std::cout << "Received offset: " << offset << std::endl;
+      int offset = strtol(buffer, NULL, 10);
+      std::cout << "Received offset: " << offset << "\n";
 
       std::ostringstream response;
-      if (offset < words.size()) {
-        for (size_t i = offset; i < words.size(); i++) {
-          response << words[i];
-          if (i < words.size() - 1) {
-            response << ',';
+      if (offset < (int)words.size()) {
+        for (size_t i = offset; i < words.size(); i += PACKET_SIZE) {
+          response.str("");
+          response.clear();
+
+          for (size_t j = 0; j < PACKET_SIZE && (i + j) < words.size(); ++j) {
+            response << words[i + j];
+            if (i + j < words.size() - 1 && j < PACKET_SIZE - 1) {
+              response << ',';
+            }
           }
+
+          std::string response_str = response.str();
+
+          ssize_t bytes_sent =
+              write(c, response_str.c_str(), response_str.size());
+          printf("bytes_send : %zd ------------", bytes_sent);
+          if (bytes_sent == -1) {
+            std::cout << "write() error\n";
+            break;
+          } else if (bytes_sent != static_cast<ssize_t>(response_str.size())) {
+            std::cout << "Partial write occurred" << "\n";
+          }
+
+          std::cout << "Sent packet: " << response_str << "\n";
+          usleep(100000);
+          std::cout << "\n--------------K words sent-------------------\n";
         }
       } else {
         response << "Offset exceeds number of words";
+        std::string response_str = response.str();
+        write(c, response_str.c_str(), response_str.size());
+        std::cout << "Sent: " << response_str << "\n";
       }
-
-      std::string response_str = response.str();
-      // Send file content to client
-      ssize_t bytes_sent = write(c, response_str.c_str(), response_str.size());
-      if (bytes_sent == -1) {
-        std::cout << "write() error\n";
-      } else if (bytes_sent != static_cast<ssize_t>(response_str.size())) {
-        std::cerr << "Partial write occurred" << std::endl;
-      }
-
-      std::cout << "Sent: " << response_str << std::endl;
     }
     close(c);
   }
