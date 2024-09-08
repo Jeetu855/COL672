@@ -19,7 +19,7 @@
 #define FILE_BUFFER 4096
 
 void handle_sigpipe(int sig) {
-  std::cout << "Caught SIGPIPE (Client disconnected abruptly)\n";
+  std::cout << "Caught SIGPIPE (Client disconnected abruptly)" << std::endl;
 } // if socket or pipe closed from the other end and we try to write to it,
   // sigpipe signal is sent
 // if this signal is received by the process, the default action is termination,
@@ -137,9 +137,11 @@ int main() {
 
           std::string response_str = response.str();
 
+          response_str += '\n';
+
           ssize_t bytes_sent =
               write(c, response_str.c_str(), response_str.size());
-          printf("bytes_send : %zd ", bytes_sent);
+          printf("bytes_sent : %zd ", bytes_sent);
           if (bytes_sent == -1) {
             std::cout << "write() error\n";
             break;
