@@ -5,6 +5,7 @@
 #include <iostream>
 #include <jsoncpp/json/json.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <sstream>
 #include <stdio.h>
 #include <string.h>
@@ -17,8 +18,17 @@
 #define BUFFER_SIZE 4096
 #define FILE_BUFFER 4096
 
+void handle_sigpipe(int sig) {
+  std::cout << "Caught SIGPIPE (Client disconnected abruptly)" << std::endl;
+} // if socket or pipe closed from the other end and we try to write to it,
+  // sigpipe signal is sent
+// if this signal is received by the process, the default action is termination,
+// by here we create a function to just print if we receive sigpipe and we just
+// print the message rather than termination
+
 int main() {
   int s, c, fd;
+  signal(SIGPIPE, handle_sigpipe);
   socklen_t addrlen;
   std::vector<std::string> words; // csv file ke words ke liye
   char buffer[BUFFER_SIZE];
@@ -56,9 +66,7 @@ int main() {
   std::string token;
 
   while (std::getline(stream_of_file, token, ',')) {
-    if (token != "EOF") {
-      words.push_back(token);
-    }
+    words.push_back(token);
   }
 
   struct sockaddr_in srv, client;
@@ -131,7 +139,7 @@ int main() {
 
           ssize_t bytes_sent =
               write(c, response_str.c_str(), response_str.size());
-          printf("bytes_send : %zd ------------", bytes_sent);
+          printf("bytes_send : %zd ", bytes_sent);
           if (bytes_sent == -1) {
             std::cout << "write() error\n";
             break;
