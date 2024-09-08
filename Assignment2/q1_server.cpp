@@ -19,7 +19,7 @@
 #define FILE_BUFFER 4096
 
 void handle_sigpipe(int sig) {
-  std::cout << "Caught SIGPIPE (Client disconnected abruptly)" << std::endl;
+  std::cout << "Caught SIGPIPE (Client disconnected abruptly)\n";
 } // if socket or pipe closed from the other end and we try to write to it,
   // sigpipe signal is sent
 // if this signal is received by the process, the default action is termination,
