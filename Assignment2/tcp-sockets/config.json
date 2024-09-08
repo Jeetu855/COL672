@@ -1,0 +1,8 @@
+{
+    "server_ip": "127.0.0.1",
+    "server_port": 8001,
+    "p": 2,
+    "k": 10,
+    "file_to_read": "words.csv"
+  }
+  
