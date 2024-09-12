@@ -9,10 +9,43 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-
+#include<bits/stdc++.h>
+#include<algorithm>
+using namespace std;
 #define BUFFER_SIZE 4096
+map<string,int> freq;
+void print_freq()
+            {
+                     map<string,int> ::iterator it=freq.begin();
+                     while(it!=freq.end())
+                        {
+                          cout<<it->first<< " "<<it->second<<endl;
+                          ++it;
+          
+                        }
+            };
+void removeNewLinesWithcomma(string &str)
+{
+           replace(str.begin(),str.end(),'\n',','),str.end();
+
+};
+void  frequency(string response_str)
+      {
+           removeNewLinesWithcomma(response_str);
+           for(int i=0;i<response_str.size();i++)
+            {
+                    string s1="";
+                    while(i<response_str.size() && response_str[i]!=',' && response_str[i]!=' ')
+                            {
+                                    s1=s1+response_str[i];
+                                    i++;
+                            };      
+                    freq[s1]=freq[s1]+1;        
+            }
+      };
 
 int main() {
+  map<string,int> freq;  //contain frequency of corresponding word
   int s;
   struct sockaddr_in sock;
   char buffer[BUFFER_SIZE];
@@ -62,7 +95,7 @@ int main() {
            (bytes_read = read(s, buffer, sizeof(buffer) - 1)) > 0) {
       buffer[bytes_read] = '\0';
       response_str += buffer;
-
+      
       int count = 0;
       for (int i = 0; buffer[i] != '\0'; i++) {
         if (buffer[i] == ',') {
@@ -82,8 +115,8 @@ int main() {
       }
     }
 
-    printf("%s\n", response_str.c_str());
-
+    printf("%s\n", response_str.c_str());       //to C style
+    frequency(response_str.c_str());
     if (bytes_read < 0) {
       printf("read");
       close(s);
@@ -98,7 +131,7 @@ int main() {
 
     printf("\nSending new request for offset %d\n", offset);
   }
-
+  print_freq();
   close(s);
   return 0;
 }
