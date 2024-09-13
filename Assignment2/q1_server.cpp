@@ -19,9 +19,9 @@
 #define FILE_BUFFER 4096
 
 void handle_sigpipe(int sig) {
-  std::cout << "Caught SIGPIPE (Client disconnected abruptly)" << std::endl;
+  std::cout << "Caught SIGPIPE (Client disconnected abruptly)\n";
 } // if socket or pipe closed from the other end and we try to write to it,
-  // sigpipe signal is sent
+// sigpipe signal is sent
 // if this signal is received by the process, the default action is termination,
 // by here we create a function to just print if we receive sigpipe and we just
 // print the message rather than termination
@@ -120,7 +120,7 @@ int main() {
       buffer[bytes_from_client] = '\0';
 
       int offset = strtol(buffer, NULL, 10);
-      std::cout << "Received offset: " << offset << "\n";
+      // std::cout << "Received offset: " << offset << "\n";
 
       std::ostringstream response;
       if (offset < (int)words.size()) {
@@ -141,7 +141,7 @@ int main() {
 
           ssize_t bytes_sent =
               write(c, response_str.c_str(), response_str.size());
-          printf("bytes_sent : %zd ", bytes_sent);
+          printf("bytes_sent : %zd \n", bytes_sent);
           if (bytes_sent == -1) {
             std::cout << "write() error\n";
             break;
@@ -149,12 +149,10 @@ int main() {
             std::cout << "Partial write occurred" << "\n";
           }
 
-          std::cout << "Sent packet: " << response_str << "\n";
           usleep(100000);
-          std::cout << "\n--------------K words sent-------------------\n";
         }
       } else {
-        response << "Offset exceeds number of words";
+        response << "End of connection";
         std::string response_str = response.str();
         write(c, response_str.c_str(), response_str.size());
         std::cout << "Sent: " << response_str << "\n";
@@ -171,5 +169,3 @@ int main() {
 // shouldn't matter. All that matters is that you receive information from the
 // stream (or send information into that stream.)
 //
-//
-// fix if client just presses enter, it sends the entire file
