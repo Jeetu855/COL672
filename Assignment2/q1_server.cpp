@@ -41,8 +41,9 @@ int main() {
   int PORT = config["server_port"].asInt();
   int PACKET_SIZE = config["p"].asInt();
   int MAX_WORDS = config["k"].asInt();
+  std::string file_to_read = config["file_to_read"].asString();
 
-  fd = open("words.csv", O_RDONLY);
+  fd = open(file_to_read.c_str(), O_RDONLY);
   if (fd == -1) {
     std::cout << "open() error\n";
     return -1;
