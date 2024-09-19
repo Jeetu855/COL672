@@ -1,51 +1,77 @@
 /* sockets.c */
 
+#include <algorithm>
 #include <arpa/inet.h>
+#include <bits/stdc++.h>
 #include <fstream>
 #include <jsoncpp/json/json.h>
 #include <netinet/in.h>
+#include <nlohmann/json.hpp>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include<bits/stdc++.h>
-#include<algorithm>
-using namespace std;
-#define BUFFER_SIZE 4096
-map<string,int> freq;
-void print_freq()
-            {
-                     map<string,int> ::iterator it=freq.begin();
-                     while(it!=freq.end())
-                        {
-                          cout<<it->first<< " "<<it->second<<endl;
-                          ++it;
-          
-                        }
-            };
-void removeNewLinesWithcomma(string &str)
-{
-           replace(str.begin(),str.end(),'\n',','),str.end();
 
+#define BUFFER_SIZE 10240
+using json = nlohmann::json; // like alias in bash
+
+std::map<std::string, int> freq;
+
+void print_freq() {
+  // Open the file in write mode (this will create the file if it doesn't exist)
+  std::ofstream output_file("output_part1.txt");
+
+  // Check if the file is successfully opened
+  if (!output_file.is_open()) {
+    std::cerr << "Failed to open output file.\n";
+    return;
+  }
+
+  // Create a vector of pairs from the map
+  std::vector<std::pair<std::string, int>> sorted_freq(freq.begin(),
+                                                       freq.end());
+
+  // Sort the vector in a case-insensitive manner
+  std::sort(sorted_freq.begin(), sorted_freq.end(),
+            [](const std::pair<std::string, int> &a,
+               const std::pair<std::string, int> &b) {
+              std::string a_lower = a.first;
+              std::string b_lower = b.first;
+              std::transform(a_lower.begin(), a_lower.end(), a_lower.begin(),
+                             ::tolower);
+              std::transform(b_lower.begin(), b_lower.end(), b_lower.begin(),
+                             ::tolower);
+              return a_lower < b_lower;
+            });
+
+  // Write the sorted frequency to the file
+  for (const auto &pair : sorted_freq) {
+    output_file << pair.first << " " << pair.second << "\n";
+  }
+
+  // Close the file
+  output_file.close();
 };
-void  frequency(string response_str)
-      {
-           removeNewLinesWithcomma(response_str);
-           for(int i=0;i<response_str.size();i++)
-            {
-                    string s1="";
-                    while(i<response_str.size() && response_str[i]!=',' && response_str[i]!=' ')
-                            {
-                                    s1=s1+response_str[i];
-                                    i++;
-                            };      
-                    freq[s1]=freq[s1]+1;        
-            }
-      };
+
+void removeNewLinesWithcomma(std::string &str) {
+  replace(str.begin(), str.end(), '\n', ',');
+};
+
+void frequency(std::string response_str) {
+  std::string str = response_str;
+  removeNewLinesWithcomma(str);
+  std::istringstream iss(str);
+  std::string word;
+  while (std::getline(iss, word, ',')) {
+    if (!word.empty() && word != "EOF") {
+      freq[word]++;
+    }
+  }
+};
 
 int main() {
-  map<string,int> freq;  //contain frequency of corresponding word
+  std::map<std::string, int> freq; // contain frequency of corresponding word
   int s;
   struct sockaddr_in sock;
   char buffer[BUFFER_SIZE];
@@ -53,18 +79,24 @@ int main() {
   int offset = 0;
   int bytes_read;
 
-  std::ifstream config_file("config.json", std::ifstream::binary);
-  Json::Value config;
+  // open file as input file stream
+  std::ifstream config_file("config.json");
+  if (!config_file.is_open()) {
+    std::cout << "Failed to open config.json\n";
+    return -1;
+  }
+
+  json config;
   config_file >> config;
 
-  std::string IP = config["server_ip"].asString();
-  int PORT = config["server_port"].asInt();
-  int MAX_WORDS = config["k"].asInt();
-  int PACKET_SIZE = config["p"].asInt();
+  std::string IP = config["server_ip"];
+  int PORT = config["server_port"];
+  int MAX_WORDS = config["k"];
+  int PACKET_SIZE = config["p"];
 
   s = socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0) {
-    printf("socket");
+    printf("socket() error");
     return -1;
   }
 
@@ -73,7 +105,7 @@ int main() {
   sock.sin_family = AF_INET;
 
   if (connect(s, (struct sockaddr *)&sock, sizeof(struct sockaddr_in)) != 0) {
-    printf("connect");
+    printf("connect() error");
     close(s);
     return -1;
   }
@@ -81,7 +113,7 @@ int main() {
   while (1) {
     snprintf(request, sizeof(request), "%d", offset);
     if (write(s, request, strlen(request)) < 0) {
-      printf("write");
+      printf("write() error");
       close(s);
       return -1;
     }
@@ -95,7 +127,7 @@ int main() {
            (bytes_read = read(s, buffer, sizeof(buffer) - 1)) > 0) {
       buffer[bytes_read] = '\0';
       response_str += buffer;
-      
+
       int count = 0;
       for (int i = 0; buffer[i] != '\0'; i++) {
         if (buffer[i] == ',') {
@@ -115,10 +147,10 @@ int main() {
       }
     }
 
-    printf("%s\n", response_str.c_str());       //to C style
+    printf("%s\n", response_str.c_str()); // to C style
     frequency(response_str.c_str());
     if (bytes_read < 0) {
-      printf("read");
+      printf("read() error");
       close(s);
       return -1;
     }

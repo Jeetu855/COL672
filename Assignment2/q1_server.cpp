@@ -3,8 +3,9 @@
 #include <fcntl.h>
 #include <fstream>
 #include <iostream>
-#include <jsoncpp/json/json.h>
 #include <netinet/in.h>
+#include <nlohmann/json.hpp>
+#include <pthread.h>
 #include <signal.h>
 #include <sstream>
 #include <stdio.h>
@@ -15,8 +16,8 @@
 #include <unistd.h>
 #include <vector>
 
-#define BUFFER_SIZE 4096
-#define FILE_BUFFER 4096
+#define BUFFER_SIZE 10240
+#define FILE_BUFFER 10240
 
 void handle_sigpipe(int sig) {
   std::cout << "Caught SIGPIPE (Client disconnected abruptly)\n";
@@ -26,6 +27,8 @@ void handle_sigpipe(int sig) {
 // by here we create a function to just print if we receive sigpipe and we just
 // print the message rather than termination
 
+using json = nlohmann::json;
+
 int main() {
   int s, c, fd;
   signal(SIGPIPE, handle_sigpipe);
@@ -33,16 +36,23 @@ int main() {
   std::vector<std::string> words; // csv file ke words ke liye
   char buffer[BUFFER_SIZE];
 
-  std::ifstream config_file("config.json", std::ifstream::binary);
-  Json::Value config; // need a stream object to read into this
+  std::ifstream config_file("config.json");
+  if (!config_file.is_open()) {
+    std::cerr << "Failed to open config.json\n";
+    return -1;
+  }
+  // need a stream object to read into this
+  json config;
   config_file >> config;
 
-  std::string IP = config["server_ip"].asString();
-  int PORT = config["server_port"].asInt();
-  int PACKET_SIZE = config["p"].asInt();
-  int MAX_WORDS = config["k"].asInt();
-  std::string file_to_read = config["file_to_read"].asString();
+  // Read values from the JSON config
+  std::string IP = config["server_ip"];
+  int PORT = config["server_port"];
+  int PACKET_SIZE = config["p"];
+  int MAX_WORDS = config["k"];
+  std::string file_to_read = config["input_file"];
 
+  // Open the specified file
   fd = open(file_to_read.c_str(), O_RDONLY);
   if (fd == -1) {
     std::cout << "open() error\n";
@@ -76,7 +86,7 @@ int main() {
 
   s = socket(AF_INET, SOCK_STREAM, 0);
   if (s < 0) {
-    perror("socket");
+    printf("socket() error");
     return -1;
   }
 
@@ -121,7 +131,7 @@ int main() {
       buffer[bytes_from_client] = '\0';
 
       int offset = strtol(buffer, NULL, 10);
-      // std::cout << "Received offset: " << offset << "\n";
+      std::cout << "Received offset: " << offset << "\n";
 
       std::ostringstream response;
       if (offset < (int)words.size()) {
