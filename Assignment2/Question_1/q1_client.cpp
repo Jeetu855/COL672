@@ -11,7 +11,6 @@
 #include <map>
 #include <sstream>
 #include <string>
-#include <string>
 #include <vector>
 // #include <jsoncpp/json/json.h>
 #include <iostream>
@@ -29,20 +28,16 @@ using json = nlohmann::json; // like alias in bash
 std::map<std::string, int> freq;
 
 void print_freq() {
-  // Open the file in write mode (this will create the file if it doesn't exist)
   std::ofstream output_file("output_part1.txt");
 
-  // Check if the file is successfully opened
   if (!output_file.is_open()) {
     std::cerr << "Failed to open output file.\n";
     return;
   }
 
-  // Create a vector of pairs from the map
   std::vector<std::pair<std::string, int>> sorted_freq(freq.begin(),
                                                        freq.end());
 
-  // Sort the vector in a case-insensitive manner
   std::sort(sorted_freq.begin(), sorted_freq.end(),
             [](const std::pair<std::string, int> &a,
                const std::pair<std::string, int> &b) {
@@ -55,12 +50,10 @@ void print_freq() {
               return a_lower < b_lower;
             });
 
-  // Write the sorted frequency to the file
   for (const auto &pair : sorted_freq) {
     output_file << pair.first << " " << pair.second << "\n";
   }
 
-  // Close the file
   output_file.close();
 };
 
@@ -81,7 +74,7 @@ void frequency(std::string response_str) {
 };
 
 int main() {
-  std::map<std::string, int> freq; // contain frequency of corresponding word
+  std::map<std::string, int> freq;
   int s;
   struct sockaddr_in sock;
   char buffer[BUFFER_SIZE];
@@ -89,7 +82,6 @@ int main() {
   int offset = 0;
   int bytes_read;
 
-  // open file as input file stream
   std::ifstream config_file("config.json");
   if (!config_file.is_open()) {
     std::cout << "Failed to open config.json\n";
@@ -157,7 +149,7 @@ int main() {
         break;
       }
     }
-    printf("%s\n", response_str.c_str()); // to C style
+    printf("%s\n", response_str.c_str());
     frequency(response_str.c_str());
     if (bytes_read < 0) {
       printf("read() error");
