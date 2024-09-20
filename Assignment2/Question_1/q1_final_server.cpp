@@ -75,7 +75,7 @@ void handle_client(int c, const std::vector<std::string> &words,
           std::cout << "Partial write occurred" << "\n";
         }
 
-        usleep(100000);
+        //usleep(100000);
       }
     } else {
       response << "End of connection";

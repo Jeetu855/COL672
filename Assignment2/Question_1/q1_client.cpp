@@ -3,18 +3,18 @@
 #include <algorithm>
 #include <arpa/inet.h>
 // #include <bits/stdc++.h>
-#include <iostream>
-#include <vector>
-#include <string>
-#include <map>
-#include <chrono>
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
-#include<sstream>
-#include<string>
 #include <fstream>
+#include <iostream>
+#include <map>
+#include <sstream>
+#include <string>
+#include <string>
+#include <vector>
 // #include <jsoncpp/json/json.h>
-#include<iostream>
+#include <iostream>
 #include <netinet/in.h>
 #include <nlohmann/json.hpp>
 #include <stdio.h>
@@ -119,7 +119,7 @@ int main() {
     close(s);
     return -1;
   }
-  
+
   while (1) {
     snprintf(request, sizeof(request), "%d", offset);
     if (write(s, request, strlen(request)) < 0) {
@@ -133,13 +133,12 @@ int main() {
     bool eof_received = false;
     std::string response_str = "";
 
-
     while (words_received < MAX_WORDS &&
            (bytes_read = read(s, buffer, sizeof(buffer) - 1)) > 0) {
       buffer[bytes_read] = '\0';
       response_str += buffer;
-    auto end_receive = std::chrono::high_resolution_clock::now();
-         
+      auto end_receive = std::chrono::high_resolution_clock::now();
+
       int count = 0;
       for (int i = 0; buffer[i] != '\0'; i++) {
         if (buffer[i] == ',') {
@@ -174,7 +173,6 @@ int main() {
 
     printf("\nSending new request for offset %d\n", offset);
   }
-  
 
   print_freq();
   close(s);
