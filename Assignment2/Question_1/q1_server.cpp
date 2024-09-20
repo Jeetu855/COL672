@@ -4,7 +4,7 @@
 #include <fstream>
 #include <iostream>
 #include <netinet/in.h>
-#include <nlohmann/json.hpp>
+#include<nlohmann/json.hpp>
 #include <pthread.h>
 #include <signal.h>
 #include <sstream>
@@ -50,7 +50,7 @@ int main() {
   int PORT = config["server_port"];
   int PACKET_SIZE = config["p"];
   int MAX_WORDS = config["k"];
-  std::string file_to_read = config["input_file"];
+  std::string file_to_read = config["file_to_read"];
 
   // Open the specified file
   fd = open(file_to_read.c_str(), O_RDONLY);
@@ -100,7 +100,7 @@ int main() {
     return -1;
   }
 
-  if (listen(s, 5) != 0) {
+  if (listen(s, 34) != 0) {
     std::cout << "listen() error\n";
     close(s);
     return -1;
