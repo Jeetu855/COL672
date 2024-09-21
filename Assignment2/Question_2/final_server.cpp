@@ -19,17 +19,16 @@
 #define FILE_BUFFER_LEN 10240
 
 int PACKET_SIZE = 10;
-std::vector<std::string> data_words; // Stores words from the CSV file
+std::vector<std::string> data_words; 
+int client_id_counter = 1;           
+pthread_mutex_t client_id_mutex;     
 
-int client_id_counter = 1;           // Global counter for client IDs
-pthread_mutex_t client_id_mutex;     // Mutex for synchronizing client ID assignment
 
-// Function to handle SIGPIPE signals
 void signal_handler(int signum) {
     std::cout << "SIGPIPE caught (Client disconnected abruptly)\n";
 }
 
-// Function to send data to the client
+
 void send_data_to_client(int client_socket, int offset) {
     std::ostringstream response_stream;
     char send_buffer[BUFFER_LEN];
@@ -58,29 +57,29 @@ void send_data_to_client(int client_socket, int offset) {
                 std::cout << "Partial write occurred\n";
             }
         }
-        // Send EOF to indicate end of data
+ 
         std::string eof_message = "EOF\n";
         write(client_socket, eof_message.c_str(), eof_message.size());
         std::cout << "Sent: " << eof_message;
     } else {
-        // If offset is beyond data size, send EOF immediately
+       
         std::string eof_message = "EOF\n";
         write(client_socket, eof_message.c_str(), eof_message.size());
         std::cout << "Sent: " << eof_message;
     }
 }
 
-// Thread function to handle each client
+
 void *client_handler(void *arg) {
     int client_socket = *(int *)arg;
-    delete (int *)arg; // Free allocated memory
+    delete (int *)arg; 
 
-    // Assign a unique client ID
+  
     pthread_mutex_lock(&client_id_mutex);
     int client_id = client_id_counter++;
     pthread_mutex_unlock(&client_id_mutex);
 
-    // Send client ID to the client
+    
     std::string id_message = std::to_string(client_id) + "\n";
     if (write(client_socket, id_message.c_str(), id_message.size()) < 0) {
         std::cout << "Failed to send client ID\n";
@@ -88,7 +87,7 @@ void *client_handler(void *arg) {
         return NULL;
     }
 
-    char recv_buffer[BUFFER_LEN]; // Buffer for receiving data from client
+    char recv_buffer[BUFFER_LEN]; 
 
     while (true) {
         ssize_t received_bytes = read(client_socket, recv_buffer, BUFFER_LEN - 1);
@@ -102,11 +101,11 @@ void *client_handler(void *arg) {
         }
         recv_buffer[received_bytes] = '\0';
 
-        int offset = atoi(recv_buffer); // Convert received string to integer
+        int offset = atoi(recv_buffer); 
         std::cout << "Received offset from client " << client_id << ": " << offset << "\n";
 
         send_data_to_client(client_socket, offset);
-        break; // Close connection after sending data
+        break;
     }
     close(client_socket);
     return NULL;
@@ -117,7 +116,7 @@ int main() {
     signal(SIGPIPE, signal_handler);
     socklen_t addr_len;
 
-    // Read configuration from config.json
+
     std::ifstream config_stream("config.json");
     if (!config_stream.is_open()) {
         std::cerr << "Cannot open config.json\n";
@@ -127,12 +126,12 @@ int main() {
     nlohmann::json config_json;
     config_stream >> config_json;
 
-    // Retrieve configuration parameters
+   
     std::string server_ip;
     int server_port, packet_size_config, max_words;
     std::string input_filename;
 
-    // Check and assign JSON values using if-else
+  
     if (config_json.contains("server_ip") && config_json["server_ip"].is_string()) {
         server_ip = config_json["server_ip"];
     } else {
@@ -168,16 +167,16 @@ int main() {
         return -1;
     }
 
-    // Update global PACKET_SIZE
+   
     PACKET_SIZE = packet_size_config;
 
-    // Initialize mutex for client ID assignment
+    
     if (pthread_mutex_init(&client_id_mutex, NULL) != 0) {
         std::cerr << "Mutex initialization failed\n";
         return -1;
     }
 
-    // Read words from the input file
+    
     std::ifstream input_file(input_filename);
     if (!input_file.is_open()) {
         std::cout << "Cannot open input file: " << input_filename << "\n";
@@ -190,7 +189,7 @@ int main() {
     }
     input_file.close();
 
-    // Setup server socket
+    
     struct sockaddr_in server_addr_struct, client_addr_struct;
     memset(&server_addr_struct, 0, sizeof(server_addr_struct));
     memset(&client_addr_struct, 0, sizeof(client_addr_struct));
@@ -219,13 +218,13 @@ int main() {
 
     std::cout << "Server listening on " << server_ip << ":" << server_port << "\n";
 
-    // Continuously accept clients
+ 
     while (true) {
         addr_len = sizeof(client_addr_struct);
         client_socket = accept(server_socket, (struct sockaddr *)&client_addr_struct, &addr_len);
         if (client_socket < 0) {
             perror("Error in accept()");
-            continue; // Continue accepting other clients
+            continue; 
         }
         std::cout << "Client connected\n";
         int *client_sock_ptr = new int;
@@ -237,7 +236,7 @@ int main() {
             delete client_sock_ptr;
             continue;
         }
-        pthread_detach(thread_id); // Detach thread to run independently
+        pthread_detach(thread_id); 
     }
 
     pthread_mutex_destroy(&client_id_mutex);
