@@ -1,3 +1,4 @@
+
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <fstream>
@@ -7,7 +8,6 @@
 #include <queue>
 #include <signal.h>
 #include <sstream>
-#include <stdio.h>
 #include <string.h>
 #include <string>
 #include <sys/socket.h>
@@ -15,197 +15,195 @@
 #include <unordered_map>
 #include <vector>
 
-#define BUFFER_SIZE 10240
-pthread_mutex_t queue_mutex = PTHREAD_MUTEX_INITIALIZER;
-std::queue<int> client_queue;
-int client_id_counter = 1;
+#define BUF_SIZE 10240
+pthread_mutex_t mutex_lock = PTHREAD_MUTEX_INITIALIZER;
+std::queue<int> socket_queue;
+int client_id_seq = 1;
 
 using json = nlohmann::json;
 
-void handle_sigpipe(int sig) {
-    std::cout << "Caught SIGPIPE (Client disconnected abruptly)\n";
+void sigpipe_handler(int sig) {
+    std::cout << "SIGPIPE caught: Client disconnected unexpectedly.\n";
 }
 
-void *serve_client(void *arg) {
-    std::pair<std::vector<std::string>*, int> *data = (std::pair<std::vector<std::string>*, int> *)arg;
-    std::vector<std::string> *words_ptr = data->first;
-    int k = data->second;
-    std::vector<std::string> &words = *words_ptr;
+void* client_handler(void* arg) {
+    auto* data_pair = static_cast<std::pair<std::vector<std::string>*, int>*>(arg);
+    std::vector<std::string>* words_ptr = data_pair->first;
+    int k_val = data_pair->second;
+    std::vector<std::string>& words_list = *words_ptr;
 
     while (true) {
-        pthread_mutex_lock(&queue_mutex);
-        if (!client_queue.empty()) {
-            int client_socket = client_queue.front();
-            client_queue.pop();
-            pthread_mutex_unlock(&queue_mutex);
+        pthread_mutex_lock(&mutex_lock);
+        if (!socket_queue.empty()) {
+            int client_sock = socket_queue.front();
+            socket_queue.pop();
+            pthread_mutex_unlock(&mutex_lock);
 
-            char buffer[BUFFER_SIZE];
-            int client_id = client_id_counter++;
+            char recv_buffer[BUF_SIZE];
+            int client_id = client_id_seq++;
 
-            std::string output_filename = "output_" + std::to_string(client_id) + ".txt";
-            std::ofstream output_file(output_filename);
-            if (!output_file.is_open()) {
-                std::cerr << "Failed to open output file for client " << client_id << "\n";
-                close(client_socket);
+            std::string out_file = "output_" + std::to_string(client_id) + ".txt";
+            std::ofstream outfile(out_file);
+            if (!outfile.is_open()) {
+                std::cerr << "Unable to open file for client " << client_id << "\n";
+                close(client_sock);
                 continue;
             }
 
-            std::cout << "Serving client with ID: " << client_id << "\n";
+            std::cout << "Processing client ID: " << client_id << "\n";
 
-            int offset = 0;
-            std::unordered_map<std::string, int> word_frequency;
+            int current_offset = 0;
+            std::unordered_map<std::string, int> freq_map;
 
             while (true) {
-                ssize_t bytes_from_client = read(client_socket, buffer, BUFFER_SIZE - 1);
-                if (bytes_from_client <= 0) {
-                    std::cout << "Client " << client_id << " disconnected\n";
+                ssize_t read_bytes = read(client_sock, recv_buffer, BUF_SIZE - 1);
+                if (read_bytes <= 0) {
+                    std::cout << "Client " << client_id << " disconnected.\n";
                     break;
                 }
-                buffer[bytes_from_client] = '\0';
+                recv_buffer[read_bytes] = '\0';
 
-                offset = strtol(buffer, NULL, 10);
-                std::cout << "Received offset " << offset << " from client " << client_id << "\n";
+                current_offset = std::stoi(recv_buffer);
+                std::cout << "Client " << client_id << " sent offset " << current_offset << "\n";
 
-                std::ostringstream response;
-                int words_to_send = std::min(k, static_cast<int>(words.size()) - offset);
+                std::ostringstream resp_stream;
+                int send_count = std::min(k_val, static_cast<int>(words_list.size()) - current_offset);
 
-                if (offset < static_cast<int>(words.size())) {
-                    for (int i = 0; i < words_to_send; ++i) {
-                        const std::string &current_word = words[offset + i];
-                        if (current_word != "EOF") {  // Skip EOF entirely
-                            response << current_word;
-                            if (i < words_to_send - 1) {
-                                response << ',';
+                if (current_offset < static_cast<int>(words_list.size())) {
+                    for (int i = 0; i < send_count; ++i) {
+                        const std::string& word = words_list[current_offset + i];
+                        if (word != "EOF") {
+                            resp_stream << word;
+                            if (i < send_count - 1) {
+                                resp_stream << ',';
                             }
-                            word_frequency[current_word]++;
+                            freq_map[word]++;
                         }
                     }
 
-                    std::string response_str = response.str() + '\n';
-
-                    ssize_t bytes_sent = write(client_socket, response_str.c_str(), response_str.size());
-                    if (bytes_sent == -1) {
-                        std::cerr << "Error writing to client " << client_id << "\n";
+                    std::string response = resp_stream.str() + '\n';
+                    ssize_t sent_bytes = write(client_sock, response.c_str(), response.size());
+                    if (sent_bytes == -1) {
+                        std::cerr << "Error sending to client " << client_id << "\n";
                         break;
                     }
 
-                    std::cout << "Bytes sent to client " << client_id << ": " << bytes_sent << "\n";
+                    std::cout << "Sent " << sent_bytes << " bytes to client " << client_id << "\n";
 
-                    if (offset + words_to_send >= static_cast<int>(words.size())) {
-                        std::cout << "End of word list reached for client " << client_id << "\n";
+                    if (current_offset + send_count >= static_cast<int>(words_list.size())) {
+                        std::cout << "All words sent to client " << client_id << "\n";
                         break;
                     }
                 } else {
-                    std::cout << "Offset beyond word list size, ending connection.\n";
+                    std::cout << "Offset exceeds word list for client " << client_id << ".\n";
                     break;
                 }
             }
 
-            for (const auto &entry : word_frequency) {
-                output_file << entry.first << "," << entry.second << "\n";
+            for (const auto& [word, count] : freq_map) {
+                outfile << word << "," << count << "\n";
             }
 
-            close(client_socket);
-            output_file.close();
+            close(client_sock);
+            outfile.close();
         } else {
-            pthread_mutex_unlock(&queue_mutex);
+            pthread_mutex_unlock(&mutex_lock);
         }
     }
     return nullptr;
 }
 
-void *accept_clients(void *arg) {
-    int server_socket = *((int *)arg);
-    struct sockaddr_in client;
-    socklen_t addrlen = sizeof(client);
+void* connection_acceptor(void* arg) {
+    int serv_sock = *((int*)arg);
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
 
     while (true) {
-        int client_socket = accept(server_socket, (struct sockaddr *)&client, &addrlen);
-        if (client_socket < 0) {
-            std::cerr << "accept() error\n";
+        int new_sock = accept(serv_sock, (struct sockaddr*)&client_addr, &addr_len);
+        if (new_sock < 0) {
+            std::cerr << "Error on accept()\n";
             continue;
         }
 
-        std::cout << "New client connected, added to queue\n";
+        std::cout << "New client connected, enqueued.\n";
 
-        pthread_mutex_lock(&queue_mutex);
-        client_queue.push(client_socket);
-        pthread_mutex_unlock(&queue_mutex);
+        pthread_mutex_lock(&mutex_lock);
+        socket_queue.push(new_sock);
+        pthread_mutex_unlock(&mutex_lock);
     }
     return nullptr;
 }
 
 int main() {
-    signal(SIGPIPE, handle_sigpipe);
+    signal(SIGPIPE, sigpipe_handler);
 
-    std::ifstream config_file("config.json");
-    if (!config_file.is_open()) {
-        std::cerr << "Failed to open config.json\n";
+    std::ifstream cfg_file("config.json");
+    if (!cfg_file.is_open()) {
+        std::cerr << "Cannot open config.json\n";
         return -1;
     }
 
-    json config;
-    config_file >> config;
+    json cfg_json;
+    cfg_file >> cfg_json;
 
-    std::string IP = config["server_ip"];
-    int PORT = config["server_port"];
-    int num_clients = config["num_clients"];
-    std::string input_file = config["input_file"];
-    int k = config["k"];  // Now dynamically read from config
+    std::string server_ip = cfg_json["server_ip"];
+    int server_port = cfg_json["server_port"];
+    int max_clients = cfg_json["num_clients"];
+    std::string infile = cfg_json["input_file"];
+    int k_param = cfg_json["k"];
 
-    std::vector<std::string> words;
-    std::ifstream input_stream(input_file);
-    if (!input_stream.is_open()) {
-        std::cerr << "Failed to open input file: " << input_file << "\n";
+    std::vector<std::string> word_list;
+    std::ifstream in_stream(infile);
+    if (!in_stream.is_open()) {
+        std::cerr << "Cannot open input file: " << infile << "\n";
         return -1;
     }
 
     std::string word;
-    while (std::getline(input_stream, word, ',')) {
-        if (word != "EOF") {  // Skip "EOF" when reading the file
-            words.push_back(word);
+    while (std::getline(in_stream, word, ',')) {
+        if (word != "EOF") {
+            word_list.push_back(word);
         }
     }
-    input_stream.close();
+    in_stream.close();
 
-    int server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket < 0) {
-        std::cerr << "socket() error\n";
+    int serv_sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (serv_sock < 0) {
+        std::cerr << "Socket creation failed.\n";
         return -1;
     }
 
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = inet_addr(IP.c_str());
-    server_addr.sin_port = htons(PORT);
+    struct sockaddr_in serv_addr;
+    memset(&serv_addr, 0, sizeof(serv_addr));
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_addr.s_addr = inet_addr(server_ip.c_str());
+    serv_addr.sin_port = htons(server_port);
 
-    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0) {
-        std::cerr << "bind() error\n";
-        close(server_socket);
+    if (bind(serv_sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) != 0) {
+        std::cerr << "Bind failed.\n";
+        close(serv_sock);
         return -1;
     }
 
-    if (listen(server_socket, num_clients) != 0) {
-        std::cerr << "listen() error\n";
-        close(server_socket);
+    if (listen(serv_sock, max_clients) != 0) {
+        std::cerr << "Listen failed.\n";
+        close(serv_sock);
         return -1;
     }
 
-    std::cout << "Server listening on " << IP << ":" << PORT << "\n";
+    std::cout << "Server running on " << server_ip << ":" << server_port << "\n";
 
-    // Wrap words and k into a pair to pass to the thread
-    std::pair<std::vector<std::string>*, int> thread_arg = {&words, k};
+    std::pair<std::vector<std::string>*, int> thread_args = {&word_list, k_param};
 
-    pthread_t accept_thread;
-    pthread_create(&accept_thread, nullptr, accept_clients, &server_socket);
+    pthread_t accept_tid;
+    pthread_create(&accept_tid, nullptr, connection_acceptor, &serv_sock);
 
-    pthread_t serve_thread;
-    pthread_create(&serve_thread, nullptr, serve_client, &thread_arg);
+    pthread_t handler_tid;
+    pthread_create(&handler_tid, nullptr, client_handler, &thread_args);
 
-    pthread_join(accept_thread, nullptr);
-    pthread_join(serve_thread, nullptr);
+    pthread_join(accept_tid, nullptr);
+    pthread_join(handler_tid, nullptr);
 
-    close(server_socket);
+    close(serv_sock);
     return 0;
 }

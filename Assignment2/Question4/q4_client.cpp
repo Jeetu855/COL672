@@ -1,3 +1,4 @@
+
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <fstream>
@@ -8,7 +9,6 @@
 #include <queue>
 #include <signal.h>
 #include <sstream>
-#include <stdio.h>
 #include <string.h>
 #include <string>
 #include <sys/socket.h>
@@ -16,135 +16,123 @@
 #include <vector>
 #include <thread>
 
-#define BUFFER_SIZE 10240
+#define BUF_SIZE 10240
 using json = nlohmann::json;
 
-// Client parameters struct
-struct ClientParams {
-    std::string server_ip;
-    int server_port;
-    int k;  // Number of words to request
-    int p;  // Number of words in a packet
+struct ClientSettings {
+    std::string ip;
+    int port;
+    int k_words;
+    int packet_size;
 };
 
-// Function for each client thread
-void *client_thread(void *arg) {
-    ClientParams *params = (ClientParams *)arg;
-    int s, offset = 0;
-    struct sockaddr_in sock;
-    char buffer[BUFFER_SIZE];
-    char request[100];
-    int bytes_read;
+void* client_func(void* arg) {
+    ClientSettings* settings = static_cast<ClientSettings*>(arg);
+    int sock_fd, offset = 0;
+    struct sockaddr_in server_addr;
+    char recv_buf[BUF_SIZE];
+    char req_buf[100];
+    int read_bytes;
 
-    // Create the socket
-    s = socket(AF_INET, SOCK_STREAM, 0);
-    if (s < 0) {
-        std::cerr << "socket() error\n";
+    sock_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock_fd < 0) {
+        std::cerr << "Socket creation error\n";
         pthread_exit(nullptr);
     }
 
-    // Configure the server address
-    sock.sin_addr.s_addr = inet_addr(params->server_ip.c_str());
-    sock.sin_port = htons(params->server_port);
-    sock.sin_family = AF_INET;
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(settings->port);
+    server_addr.sin_addr.s_addr = inet_addr(settings->ip.c_str());
 
-    // Connect to the server
-    if (connect(s, (struct sockaddr *)&sock, sizeof(sock)) != 0) {
-        std::cerr << "connect() error\n";
-        close(s);
+    if (connect(sock_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) != 0) {
+        std::cerr << "Connection failed\n";
+        close(sock_fd);
         pthread_exit(nullptr);
     }
 
-    // Communicate with the server, sending offset and receiving words
     while (true) {
-        snprintf(request, sizeof(request), "%d", offset);
-        if (write(s, request, strlen(request)) < 0) {
-            std::cerr << "write() error\n";
-            close(s);
+        snprintf(req_buf, sizeof(req_buf), "%d", offset);
+        if (write(sock_fd, req_buf, strlen(req_buf)) < 0) {
+            std::cerr << "Write failed\n";
+            close(sock_fd);
             pthread_exit(nullptr);
         }
 
-        std::cout << "Client requesting words from offset " << offset << "...\n";
+        std::cout << "Requesting words from offset " << offset << "...\n";
 
-        int words_received = 0;
-        bool eof_received = false;
-        std::string response_str = "";
+        int words_recv = 0;
+        bool eof_flag = false;
+        std::string resp_str = "";
 
-        while (words_received < params->k && (bytes_read = read(s, buffer, sizeof(buffer) - 1)) > 0) {
-            buffer[bytes_read] = '\0';
-            response_str += buffer;
+        while (words_recv < settings->k_words && (read_bytes = read(sock_fd, recv_buf, sizeof(recv_buf) - 1)) > 0) {
+            recv_buf[read_bytes] = '\0';
+            resp_str += recv_buf;
 
-            // Count the number of words received in the buffer
-            int word_count = 0;
-            for (int i = 0; buffer[i] != '\0'; i++) {
-                if (buffer[i] == ',') {
-                    word_count++;
+            int cnt = 0;
+            for (int i = 0; recv_buf[i] != '\0'; ++i) {
+                if (recv_buf[i] == ',') {
+                    cnt++;
                 }
             }
-            words_received += word_count + 1;
+            words_recv += cnt + 1;
 
-            if (strstr(buffer, "EOF") != NULL) {
-                std::cout << "EOF received.\n";
-                eof_received = true;
+            if (strstr(recv_buf, "EOF") != nullptr) {
+                std::cout << "EOF encountered.\n";
+                eof_flag = true;
                 break;
             }
 
-            if (words_received >= params->k) {
+            if (words_recv >= settings->k_words) {
                 break;
             }
         }
 
-        if (bytes_read < 0) {
-            std::cerr << "read() error\n";
-            close(s);
+        if (read_bytes < 0) {
+            std::cerr << "Read error\n";
+            close(sock_fd);
             pthread_exit(nullptr);
         }
 
-        std::cout << "Client received: " << response_str << "\n";
+        std::cout << "Received: " << resp_str << "\n";
 
-        // If EOF was received, break out of the loop
-        if (eof_received) {
+        if (eof_flag) {
             break;
         }
 
-        // Increment the offset by k for the next request
-        offset += params->k;
-        std::cout << "Client sending new request with offset " << offset << "\n";
+        offset += settings->k_words;
+        std::cout << "Sending new offset " << offset << "\n";
     }
 
-    close(s);  // Close socket after EOF received
+    close(sock_fd);
     pthread_exit(nullptr);
 }
 
 int main() {
-    // Read configuration from the config file
-    std::ifstream config_file("config.json");
-    if (!config_file.is_open()) {
-        std::cerr << "Failed to open config.json\n";
+    std::ifstream cfg_file("config.json");
+    if (!cfg_file.is_open()) {
+        std::cerr << "Cannot open config.json\n";
         return -1;
     }
 
-    json config;
-    config_file >> config;
+    json cfg_json;
+    cfg_file >> cfg_json;
 
-    std::string IP = config["server_ip"];
-    int PORT = config["server_port"];
-    int MAX_WORDS = config["k"];
-    int NUM_CLIENTS = config["num_clients"];
+    std::string server_ip = cfg_json["server_ip"];
+    int server_port = cfg_json["server_port"];
+    int max_words = cfg_json["k"];
+    int client_count = cfg_json["num_clients"];
 
-    ClientParams params = {IP, PORT, MAX_WORDS, config["p"]};
+    ClientSettings settings = {server_ip, server_port, max_words, cfg_json["p"]};
 
-    std::vector<pthread_t> client_threads(NUM_CLIENTS);
+    std::vector<pthread_t> threads(client_count);
 
-    // Create multiple client threads, each with a 10ms delay
-    for (int i = 0; i < NUM_CLIENTS; ++i) {
-        pthread_create(&client_threads[i], nullptr, client_thread, &params);
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Delay between clients
+    for (int i = 0; i < client_count; ++i) {
+        pthread_create(&threads[i], nullptr, client_func, &settings);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    // Wait for all client threads to finish
-    for (int i = 0; i < NUM_CLIENTS; ++i) {
-        pthread_join(client_threads[i], nullptr);
+    for (int i = 0; i < client_count; ++i) {
+        pthread_join(threads[i], nullptr);
     }
 
     return 0;
