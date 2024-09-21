@@ -7,7 +7,6 @@
 #include <pthread.h>
 #include <signal.h>
 #include <sstream>
-#include <stdexcept>
 #include <stdio.h>
 #include <string.h>
 #include <string>
@@ -30,24 +29,6 @@ void signal_handler(int signum) {
     std::cout << "SIGPIPE caught (Client disconnected abruptly)\n";
 }
 
-// Function to safely retrieve a string value from JSON
-std::string get_json_string(const nlohmann::json &j_obj, const std::string &key) {
-    if (j_obj.contains(key) && j_obj[key].is_string()) {
-        return j_obj[key].get<std::string>();
-    } else {
-        throw std::invalid_argument("Missing or invalid '" + key + "' in config.json");
-    }
-}
-
-// Function to safely retrieve an integer value from JSON
-int get_json_int(const nlohmann::json &j_obj, const std::string &key) {
-    if (j_obj.contains(key) && j_obj[key].is_number_integer()) {
-        return j_obj[key].get<int>();
-    } else {
-        throw std::invalid_argument("Missing or invalid '" + key + "' in config.json");
-    }
-}
-
 // Function to send data to the client
 void send_data_to_client(int client_socket, int offset) {
     std::ostringstream response_stream;
@@ -61,7 +42,7 @@ void send_data_to_client(int client_socket, int offset) {
 
             for (size_t j = 0; j < PACKET_SIZE && (i + j) < total_words; ++j) {
                 response_stream << data_words[i + j];
-                if (i + j < total_words - 1 && j < PACKET_SIZE - 1) {
+                if ((i + j) < (total_words - 1) && j < (PACKET_SIZE - 1)) {
                     response_stream << ',';
                 }
             }
@@ -112,20 +93,17 @@ void *client_handler(void *arg) {
     while (true) {
         ssize_t received_bytes = read(client_socket, recv_buffer, BUFFER_LEN - 1);
         if (received_bytes <= 0) {
-            switch (received_bytes) {
-                case 0:
-                    std::cout << "Client disconnected\n";
-                    break;
-                case -1:
-                    std::cout << "Error in read()\n";
-                    break;
+            if (received_bytes == 0) {
+                std::cout << "Client " << client_id << " disconnected\n";
+            } else {
+                std::cout << "Error in read()\n";
             }
             break;
         }
         recv_buffer[received_bytes] = '\0';
 
-        int offset = strtol(recv_buffer, NULL, 10);
-        std::cout << "Received offset: " << offset << "\n";
+        int offset = atoi(recv_buffer); // Convert received string to integer
+        std::cout << "Received offset from client " << client_id << ": " << offset << "\n";
 
         send_data_to_client(client_socket, offset);
         break; // Close connection after sending data
@@ -147,26 +125,46 @@ int main() {
     }
 
     nlohmann::json config_json;
-    try {
-        config_stream >> config_json;
-    } catch (nlohmann::json::parse_error &e) {
-        std::cerr << "JSON parse error: " << e.what() << "\n";
-        return -1;
-    }
+    config_stream >> config_json;
 
     // Retrieve configuration parameters
     std::string server_ip;
     int server_port, packet_size_config, max_words;
     std::string input_filename;
 
-    try {
-        server_ip = get_json_string(config_json, "server_ip");
-        server_port = get_json_int(config_json, "server_port");
-        packet_size_config = get_json_int(config_json, "p");
-        max_words = get_json_int(config_json, "k");
-        input_filename = get_json_string(config_json, "input_file");
-    } catch (const std::invalid_argument &e) {
-        std::cerr << e.what() << "\n";
+    // Check and assign JSON values using if-else
+    if (config_json.contains("server_ip") && config_json["server_ip"].is_string()) {
+        server_ip = config_json["server_ip"];
+    } else {
+        std::cerr << "Missing or invalid 'server_ip' in config.json\n";
+        return -1;
+    }
+
+    if (config_json.contains("server_port") && config_json["server_port"].is_number_integer()) {
+        server_port = config_json["server_port"];
+    } else {
+        std::cerr << "Missing or invalid 'server_port' in config.json\n";
+        return -1;
+    }
+
+    if (config_json.contains("p") && config_json["p"].is_number_integer()) {
+        packet_size_config = config_json["p"];
+    } else {
+        std::cerr << "Missing or invalid 'p' in config.json\n";
+        return -1;
+    }
+
+    if (config_json.contains("k") && config_json["k"].is_number_integer()) {
+        max_words = config_json["k"];
+    } else {
+        std::cerr << "Missing or invalid 'k' in config.json\n";
+        return -1;
+    }
+
+    if (config_json.contains("input_file") && config_json["input_file"].is_string()) {
+        input_filename = config_json["input_file"];
+    } else {
+        std::cerr << "Missing or invalid 'input_file' in config.json\n";
         return -1;
     }
 
@@ -193,9 +191,9 @@ int main() {
     input_file.close();
 
     // Setup server socket
-    struct sockaddr_in server_addr, client_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    memset(&client_addr, 0, sizeof(client_addr));
+    struct sockaddr_in server_addr_struct, client_addr_struct;
+    memset(&server_addr_struct, 0, sizeof(server_addr_struct));
+    memset(&client_addr_struct, 0, sizeof(client_addr_struct));
 
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
@@ -203,11 +201,11 @@ int main() {
         return -1;
     }
 
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = inet_addr(server_ip.c_str());
-    server_addr.sin_port = htons(server_port);
+    server_addr_struct.sin_family = AF_INET;
+    server_addr_struct.sin_addr.s_addr = inet_addr(server_ip.c_str());
+    server_addr_struct.sin_port = htons(server_port);
 
-    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) != 0) {
+    if (bind(server_socket, (struct sockaddr *)&server_addr_struct, sizeof(server_addr_struct)) != 0) {
         perror("Error in bind()");
         close(server_socket);
         return -1;
@@ -223,8 +221,8 @@ int main() {
 
     // Continuously accept clients
     while (true) {
-        addr_len = sizeof(client_addr);
-        client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &addr_len);
+        addr_len = sizeof(client_addr_struct);
+        client_socket = accept(server_socket, (struct sockaddr *)&client_addr_struct, &addr_len);
         if (client_socket < 0) {
             perror("Error in accept()");
             continue; // Continue accepting other clients
