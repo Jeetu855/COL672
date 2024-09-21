@@ -27,7 +27,9 @@ void handle_sigpipe(int sig) {
 }
 
 void *serve_client(void *arg) {
-    std::vector<std::string> *words_ptr = (std::vector<std::string> *)arg;
+    std::pair<std::vector<std::string>*, int> *data = (std::pair<std::vector<std::string>*, int> *)arg;
+    std::vector<std::string> *words_ptr = data->first;
+    int k = data->second;
     std::vector<std::string> &words = *words_ptr;
 
     while (true) {
@@ -65,7 +67,6 @@ void *serve_client(void *arg) {
                 std::cout << "Received offset " << offset << " from client " << client_id << "\n";
 
                 std::ostringstream response;
-                int k = 10;
                 int words_to_send = std::min(k, static_cast<int>(words.size()) - offset);
 
                 if (offset < static_cast<int>(words.size())) {
@@ -150,7 +151,7 @@ int main() {
     int PORT = config["server_port"];
     int num_clients = config["num_clients"];
     std::string input_file = config["input_file"];
-    int k = config["k"];
+    int k = config["k"];  // Now dynamically read from config
 
     std::vector<std::string> words;
     std::ifstream input_stream(input_file);
@@ -193,11 +194,14 @@ int main() {
 
     std::cout << "Server listening on " << IP << ":" << PORT << "\n";
 
+    // Wrap words and k into a pair to pass to the thread
+    std::pair<std::vector<std::string>*, int> thread_arg = {&words, k};
+
     pthread_t accept_thread;
     pthread_create(&accept_thread, nullptr, accept_clients, &server_socket);
 
     pthread_t serve_thread;
-    pthread_create(&serve_thread, nullptr, serve_client, &words);
+    pthread_create(&serve_thread, nullptr, serve_client, &thread_arg);
 
     pthread_join(accept_thread, nullptr);
     pthread_join(serve_thread, nullptr);
