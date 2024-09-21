@@ -17,7 +17,7 @@
 #include <algorithm>
 using json = nlohmann::json;
 vector<bool> lock ;
-int count=0;
+int client_id_counter=1;
 
 void FCFS()
 {
@@ -127,7 +127,22 @@ void* handle_client_round_robin(void *arg)    //&handle_client_round_robin
    {
        int c=*(int*)arg;
        delete(int*)arg;
+
+        pthread_mutex_lock(&client_id_mutex);
+        int client_id = client_id_counter++;
+        pthread_mutex_unlock(&client_id_mutex);
+  
+        std::string id_message = std::to_string(client_id) + "\n";
+        if (write(client_socket, id_message.c_str(), id_message.size()) < 0) {
+        std::cout << "Failed to send client ID\n";
+        close(client_socket);
+        return NULL;
+       } 
+       char recv_buffer[BUFFER_LEN];
+
        while (1) {
+       
+
       ssize_t bytes_from_client = read(c, buffer, BUFFER_SIZE - 1);
       if (bytes_from_client <= 0) {
         if (bytes_from_client == 0) {
@@ -188,6 +203,7 @@ void handle_sigpipe(int sig) {
 
 void Round_Robin()
 {
+  pthread_mutex_init(&mutexes);
   int s, c, fd;
   signal(SIGPIPE, handle_sigpipe);
   socklen_t addrlen;
@@ -272,14 +288,14 @@ void Round_Robin()
       return -1;
     }
     else {
-              if(count==0)
+              if(count==)
                   { 
                     lock.push_back(true);
-                    count=count+1;
+                   // count=count+1;
                   }
                else {
                        lock.push_back(false);
-                       count=count+1; 
+                      // count=count+1; 
                     }    
          }
     std::cout << "Client connected" << "\n";
@@ -320,7 +336,7 @@ int main(int argc, char* argv[]) {
         
         return 1;
     }
-    for (size_t i = 0; i < mutexes.size(); ++i) {
-        pthread_mutex_destroy(&mutexes[i]);
+
+    pthread_mutex_destroy(&mutexes);
     return 0;
 }
