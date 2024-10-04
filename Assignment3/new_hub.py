@@ -1,107 +1,117 @@
 from ryu.base import app_manager
 from ryu.controller import ofp_event
-from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
-from ryu.lib.dpid import dpid_to_str
-from ryu.lib.packet import ethernet, packet
+from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
+from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_3
+from ryu.lib.packet import packet, ethernet
 
-
-class HubController(app_manager.RyuApp):
+class SimpleHub(app_manager.RyuApp):
+    # Specify the OpenFlow version
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
-        super(HubController, self).__init__(*args, **kwargs)
-        print("Hub Controller initialized.")
+        super(SimpleHub, self).__init__(*args, **kwargs)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
-        """Handles switch connection and installs table-miss flow entry."""
+        """
+        Handle switch features event to set the initial table-miss flow entry.
+        This flow sends all unmatched packets to the controller.
+        """
         datapath = ev.msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        dpid = datapath.id
 
-        print(f"Switch connected: DPID={dpid_to_str(dpid)}")
+        print(f"Switch connected: {datapath.id}")
 
-        # Define table-miss flow entry: send unmatched packets to controller
-        match = parser.OFPMatch()  # Matches all packets
-        actions = [
-            parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)
-        ]
-        priority = 0  # Lowest priority
+        # Match all packets
+        match = parser.OFPMatch()
 
-        # Create and send Flow-Mod message to install table-miss entry
-        self.add_flow(datapath, priority, match, actions)
-        print(f"Table-miss flow installed on switch: DPID={dpid_to_str(dpid)}")
+        # Action to send packets to the controller
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
+                                          ofproto.OFPCML_NO_BUFFER)]
+
+        # Install the table-miss flow entry
+        self.add_flow(datapath, priority=0, match=match, actions=actions)
+        print(f"Installed table-miss flow on Switch {datapath.id} to send packets to controller.")
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
-        """Helper function to add a flow to the switch."""
+        """
+        Helper function to add a flow entry to the switch.
+        """
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
+        # Define the instruction to apply the actions
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+
+        # Create the flow mod message
         if buffer_id:
-            mod = parser.OFPFlowMod(
-                datapath=datapath,
-                buffer_id=buffer_id,
-                priority=priority,
-                match=match,
-                instructions=inst,
-            )
+            mod = parser.OFPFlowMod(datapath=datapath,
+                                    buffer_id=buffer_id,
+                                    priority=priority,
+                                    match=match,
+                                    instructions=inst)
         else:
-            mod = parser.OFPFlowMod(
-                datapath=datapath, priority=priority, match=match, instructions=inst
-            )
+            mod = parser.OFPFlowMod(datapath=datapath,
+                                    priority=priority,
+                                    match=match,
+                                    instructions=inst)
+
+        # Send the flow mod message to the switch
         datapath.send_msg(mod)
-        print(
-            f"Flow-Mod sent to switch: DPID={dpid_to_str(datapath.id)}, Priority={priority}"
-        )
+        print(f"Added flow: Priority={priority}, Match={match}, Actions={actions}")
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
-        """Handles incoming packets that do not match any flow."""
+        """
+        Handle incoming packets sent to the controller.
+        For each Packet-In, install a flow entry to flood packets with the same destination MAC.
+        """
         msg = ev.msg
         datapath = msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        dpid = datapath.id
-        in_port = msg.match["in_port"]
 
+        # Get the port from which the packet was received
+        in_port = msg.match['in_port']
+
+        # Parse the packet
         pkt = packet.Packet(msg.data)
-        eth = pkt.get_protocols(ethernet.ethernet)[0]
+        eth = pkt.get_protocol(ethernet.ethernet)
 
-        src = eth.src
-        dst = eth.dst
+        if eth is None:
+            print(f"Received a non-Ethernet packet on Switch {datapath.id}, In Port {in_port}")
+            return
 
-        print(f"Packet-In on switch: DPID={dpid_to_str(dpid)}")
-        print(f"Source MAC: {src} | Destination MAC: {dst} | Ingress Port: {in_port}")
+        src_mac = eth.src
+        dst_mac = eth.dst
 
-        # Define actions: Flood out of all ports except ingress port
+        print(f"Packet-In on Switch {datapath.id}: In Port {in_port}, Src MAC {src_mac}, Dst MAC {dst_mac}")
+
+        # Define the match for the flow: match on destination MAC address
+        match = parser.OFPMatch(eth_dst=dst_mac)
+
+        # Define the action to flood the packet
         actions = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
 
-        # If the packet was buffered by the switch, include the buffer_id
-        data = None
+        # Install the flow with higher priority to handle future packets with the same destination MAC
+        priority = 1  # Higher than table-miss
+
+        # Add the flow to the switch
+        self.add_flow(datapath, priority, match, actions, buffer_id=msg.buffer_id)
+
+        # If buffer_id is not set, send the packet out
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
             data = msg.data
+        else:
+            data = None
 
-        # Create and send Packet-Out message to flood the packet
-        out = parser.OFPPacketOut(
-            datapath=datapath,
-            buffer_id=msg.buffer_id,
-            in_port=in_port,
-            actions=actions,
-            data=data,
-        )
+        # Create the Packet-Out message to flood the current packet
+        out = parser.OFPPacketOut(datapath=datapath,
+                                  buffer_id=msg.buffer_id,
+                                  in_port=in_port,
+                                  actions=actions,
+                                  data=data)
         datapath.send_msg(out)
-        print(
-            f"Packet flooded out of switch: DPID={dpid_to_str(dpid)} via ports (all except {in_port})"
-        )
-
-        # Log traversal information
-        self.log_traversal(dpid, src, dst, in_port)
-
-    def log_traversal(self, dpid, src, dst, in_port):
-        """Logs the traversal details of each packet."""
-        print(f"Packet traversed through switch: DPID={dpid_to_str(dpid)}")
-        print(f"Packet details: {src} -> {dst} | Ingress Port: {in_port}")
-        print("--------------------------------------------------")
+        print(f"Sent Packet-Out on Switch {datapath.id}: In Port {in_port}, Action=FLOOD")
