@@ -22,7 +22,7 @@ class MSTSpanningTree(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
-        """Install table-miss and ARP flow entries for new switches."""
+        """Install table-miss flow entry for new switches."""
         datapath = ev.msg.datapath
         dpid = datapath.id
         self.datapaths[dpid] = datapath
@@ -38,11 +38,8 @@ class MSTSpanningTree(app_manager.RyuApp):
         self.add_flow(datapath, 0, match, actions)
         print(f"Switch {dpid} connected and table-miss flow installed.")
 
-        # Install flow to handle ARP packets proactively
-        match_arp = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP)
-        actions_arp = [parser.OFPActionOutput(ofproto.OFPP_FLOOD)]
-        self.add_flow(datapath, 1, match_arp, actions_arp)
-        print(f"ARP flow added on switch {dpid}")
+        # Commented out ARP flow
+        # print(f"ARP flow added on switch {dpid}")
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         """Helper function to add a flow entry."""
