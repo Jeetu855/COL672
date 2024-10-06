@@ -1,10 +1,9 @@
-from collections import defaultdict
-
 from ryu.base import app_manager
 from ryu.controller import handler, ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
 from ryu.lib.packet import ether_types, ethernet, packet
 from ryu.ofproto import ofproto_v1_3
+from collections import defaultdict
 from ryu.topology import event
 from ryu.topology.api import get_link, get_switch
 
@@ -14,15 +13,34 @@ class MSTSpanningTree(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(MSTSpanningTree, self).__init__(*args, **kwargs)
-        self.mac_to_port = {}  # {dpid: {mac: port}}
-        self.datapaths = {}  # {dpid: datapath}
-        self.adj = defaultdict(set)  # adjacency list {dpid: set(neighbor_dpid)}
-        self.mst = defaultdict(set)  # MST adjacency list {dpid: set(neighbor_dpid)}
+        self.mac_to_port = {}
+        self.datapaths = {}
+        self.adj = defaultdict(set)
+        self.mst = defaultdict(set)
         print("Controller Initialized.")
+
+    def log_switch_connection(self, datapath):
+        print(f"Switch {datapath.id} connected and table-miss flow installed.")
+
+    def print_mac_table(self):
+        print("MAC Address Table:")
+        for dpid in self.mac_to_port:
+            print(f"Switch {dpid}:")
+            for mac, port in self.mac_to_port[dpid].items():
+                print(f"  MAC {mac} -> Port {port}")
+
+    def print_topology(self):
+        print("Current Topology Adjacency List:")
+        for src in self.adj:
+            print(f"  Switch {src}: {self.adj[src]}")
+
+    def print_mst(self):
+        print("Minimum Spanning Tree (MST) Adjacency List:")
+        for src in self.mst:
+            print(f"  Switch {src}: {self.mst[src]}")
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
-        """Install table-miss flow entry for new switches."""
         datapath = ev.msg.datapath
         dpid = datapath.id
         self.datapaths[dpid] = datapath
@@ -30,19 +48,14 @@ class MSTSpanningTree(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        # Install table-miss flow entry
         match = parser.OFPMatch()
         actions = [
             parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)
         ]
         self.add_flow(datapath, 0, match, actions)
-        print(f"Switch {dpid} connected and table-miss flow installed.")
-
-        # Commented out ARP flow
-        # print(f"ARP flow added on switch {dpid}")
+        self.log_switch_connection(datapath)
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
-        """Helper function to add a flow entry."""
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
@@ -71,26 +84,38 @@ class MSTSpanningTree(app_manager.RyuApp):
         ]
     )
     def topology_change_handler(self, ev):
-        """Handle topology changes and recompute the MST."""
-        if isinstance(ev, event.EventSwitchEnter):
-            print(f"Switch Enter: {ev.switch.dp.id}")
-        elif isinstance(ev, event.EventSwitchLeave):
-            print(f"Switch Leave: {ev.switch.dp.id}")
-        elif isinstance(ev, event.EventLinkAdd):
-            print(f"Link Add: {ev.link.src.dpid} -> {ev.link.dst.dpid}")
-        elif isinstance(ev, event.EventLinkDelete):
-            print(f"Link Delete: {ev.link.src.dpid} -> {ev.link.dst.dpid}")
+        event_handler = {
+            event.EventSwitchEnter: self.handle_switch_enter,
+            event.EventSwitchLeave: self.handle_switch_leave,
+            event.EventLinkAdd: self.handle_link_add,
+            event.EventLinkDelete: self.handle_link_delete,
+        }
+        handler = event_handler.get(type(ev))
+        if handler:
+            handler(ev)
+        else:
+            print("Unknown topology event.")
 
         self.update_topology()
 
+    def handle_switch_enter(self, ev):
+        print(f"Switch Enter: {ev.switch.dp.id}")
+
+    def handle_switch_leave(self, ev):
+        print(f"Switch Leave: {ev.switch.dp.id}")
+
+    def handle_link_add(self, ev):
+        print(f"Link Add: {ev.link.src.dpid} -> {ev.link.dst.dpid}")
+
+    def handle_link_delete(self, ev):
+        print(f"Link Delete: {ev.link.src.dpid} -> {ev.link.dst.dpid}")
+
     def update_topology(self):
-        """Update the network topology and compute the MST."""
         self.get_topology_data()
         self.compute_mst()
         self.print_mst()
 
     def get_topology_data(self):
-        """Retrieve switches and links, build adjacency list."""
         switch_list = get_switch(self, None)
         self.adj = defaultdict(set)
         link_list = get_link(self, None)
@@ -98,29 +123,24 @@ class MSTSpanningTree(app_manager.RyuApp):
             src = link.src.dpid
             dst = link.dst.dpid
             self.adj[src].add(dst)
-            self.adj[dst].add(src)  # Undirected graph
-
-        print(f"Adjacency List Updated: {dict(self.adj)}")
+            self.adj[dst].add(src)
+        self.print_topology()
 
     def compute_mst(self):
-        """Compute MST using Kruskal's algorithm."""
         parent = {}
         rank = {}
 
         def find(u):
-            """Find the root of the set in which element u is."""
             while parent[u] != u:
-                parent[u] = parent[parent[u]]  # Path compression
+                parent[u] = parent[parent[u]]
                 u = parent[u]
             return u
 
         def union(u, v):
-            """Union of two sets."""
             u_root = find(u)
             v_root = find(v)
             if u_root == v_root:
-                return False  # Already in the same set
-            # Union by rank
+                return False
             if rank[u_root] < rank[v_root]:
                 parent[u_root] = v_root
             else:
@@ -129,45 +149,26 @@ class MSTSpanningTree(app_manager.RyuApp):
                     rank[u_root] += 1
             return True
 
-        # Initialize disjoint sets
         for node in self.adj:
             parent[node] = node
             rank[node] = 0
 
-        # Collect all edges (src, dst)
         edges = []
         for src in self.adj:
             for dst in self.adj[src]:
-                if src < dst:  # Avoid duplicate edges
+                if src < dst:
                     edges.append((src, dst))
 
-        # Sort edges - not necessary for unweighted graphs, but kept for clarity
         edges.sort()
-
-        # Reset MST
         self.mst = defaultdict(set)
 
-        # Kruskal's algorithm
         for u, v in edges:
             if union(u, v):
                 self.mst[u].add(v)
                 self.mst[v].add(u)
 
-        print(f"MST Adjacency List: {dict(self.mst)}")
-
-    def print_mst(self):
-        """Print the MST."""
-        print("Spanning Tree:")
-        printed = set()
-        for u in self.mst:
-            for v in self.mst[u]:
-                if (u, v) not in printed and (v, u) not in printed:
-                    print(f"  Switch {u} <--> Switch {v}")
-                    printed.add((u, v))
-
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
-        """Handle incoming packets."""
         msg = ev.msg
         datapath = msg.datapath
         dpid = datapath.id
@@ -183,30 +184,22 @@ class MSTSpanningTree(app_manager.RyuApp):
             return
         eth = eth[0]
 
-        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
-            # Ignore LLDP packets to prevent interference with topology discovery
-            return
-
-        if eth.ethertype == ether_types.ETH_TYPE_IPV6:
-            # Ignore IPv6 packets (optional, depending on your needs)
+        if eth.ethertype in [ether_types.ETH_TYPE_LLDP, ether_types.ETH_TYPE_IPV6]:
             return
 
         dst = eth.dst
         src = eth.src
 
         self.mac_to_port.setdefault(dpid, {})
-
-        # Learn the source MAC address to avoid flooding next time
         self.mac_to_port[dpid][src] = in_port
 
         print(f"Packet in on switch {dpid}: src={src}, dst={dst}, in_port={in_port}")
+        self.print_mac_table()
 
         if dst in self.mac_to_port[dpid]:
-            # Unicast packet: forward to the known destination port
             out_port = self.mac_to_port[dpid][dst]
             actions = [parser.OFPActionOutput(out_port)]
             match = parser.OFPMatch(eth_dst=dst)
-            # Install a flow entry to handle future packets
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
                 self.add_flow(datapath, 1, match, actions, buffer_id=msg.buffer_id)
                 print(
@@ -228,34 +221,21 @@ class MSTSpanningTree(app_manager.RyuApp):
                     f"Unicast packet from {src} to {dst} on switch {dpid}, port {out_port}"
                 )
         else:
-            # Broadcast packet: forward to host ports and along MST edges, excluding in_port
             actions = []
-
-            # Get all ports on the switch
             switch_ports = set(self.get_switch_ports(dpid))
-
-            # Get ports connected to neighboring switches in the MST
             mst_ports = set()
             if dpid in self.mst:
                 for neighbor in self.mst[dpid]:
                     port = self.get_port(dpid, neighbor)
                     if port:
                         mst_ports.add(port)
-
-            # Determine host ports (ports not connected to other switches)
             host_ports = switch_ports - self.get_all_link_ports(dpid)
-
-            # Exclude the incoming port when forwarding to host ports
             for port in host_ports:
                 if port != in_port:
                     actions.append(parser.OFPActionOutput(port))
-
-            # Forward along MST ports, excluding the incoming port
             for port in mst_ports:
                 if port != in_port:
                     actions.append(parser.OFPActionOutput(port))
-
-            # Remove duplicate ports
             unique_ports = set()
             final_actions = []
             for action in actions:
@@ -273,7 +253,6 @@ class MSTSpanningTree(app_manager.RyuApp):
                     f"No actions to perform for broadcast packet from {src} on switch {dpid}"
                 )
 
-            # Send the packet out
             data = None
             if msg.buffer_id == ofproto.OFP_NO_BUFFER:
                 data = msg.data
@@ -287,7 +266,6 @@ class MSTSpanningTree(app_manager.RyuApp):
             datapath.send_msg(out)
 
     def get_port(self, src_dpid, dst_dpid):
-        """Find the port number on src_dpid that connects to dst_dpid."""
         link_list = get_link(self, None)
         for link in link_list:
             if link.src.dpid == src_dpid and link.dst.dpid == dst_dpid:
@@ -295,7 +273,6 @@ class MSTSpanningTree(app_manager.RyuApp):
         return None
 
     def get_switch_ports(self, dpid):
-        """Retrieve all ports for the given switch."""
         switch_list = get_switch(self, None)
         for switch in switch_list:
             if switch.dp.id == dpid:
@@ -305,7 +282,6 @@ class MSTSpanningTree(app_manager.RyuApp):
         return []
 
     def get_all_link_ports(self, dpid):
-        """Retrieve all ports on the switch that are connected to other switches."""
         ports = set()
         link_list = get_link(self, None)
         for link in link_list:
