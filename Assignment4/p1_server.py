@@ -1,21 +1,22 @@
 import argparse
-import os
+import json
 import socket
 import time
-from threading import Timer
 
 # Constants
-MSS = 1400  # Maximum Segment Size for each packet
+MSS = 700  # Maximum Segment Size for each packet
 WINDOW_SIZE = 5  # Number of packets in flight
-DUP_ACK_THRESHOLD = 3  # Threshold for duplicate ACKs to trigger fast retransmit
-FILE_PATH = "./input.txt"  # Path to the file to send
-INITIAL_TIMEOUT = 1.0  # Initial timeout value in seconds
-END_SIGNAL = b"END"  # Signal to indicate end of file transfer
+DUP_ACK_THRESHOLD = 3  # Threshold for duplicate ACKs to trigger fast recovery
+FILE_PATH = "input.txt"
+ALPHA = 0.125  # Weight for estimated RTT
+BETA = 0.25  # Weight for RTT deviation
 
 
 def send_file(server_ip, server_port, enable_fast_recovery):
     """
-    Send a predefined file to the client, ensuring reliability over UDP.
+    Sends a file to the client reliably over UDP.
+    Implements sliding window protocol with cumulative ACKs, fast recovery,
+    and adaptive timeout using RTT estimation.
     """
     # Initialize UDP socket
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -23,254 +24,197 @@ def send_file(server_ip, server_port, enable_fast_recovery):
 
     print(f"Server listening on {server_ip}:{server_port}")
 
+    # Initialize RTT estimation variables
+    estimated_rtt = 0.5  # Initial estimated RTT in seconds
+    dev_rtt = 0.25  # Initial RTT deviation
+    timeout_interval = estimated_rtt + 4 * dev_rtt  # Initial timeout interval
+
     # Wait for client to initiate connection
-    print("Waiting for connection from client...")
-    try:
-        server_socket.settimeout(10)  # Timeout for initial connection
-        data, client_address = server_socket.recvfrom(1024)
-    except socket.timeout:
-        print("No connection initiation received. Exiting.")
-        server_socket.close()
-        return
+    client_address = None
 
-    if data != b"START":
-        print("Received invalid connection initiation. Exiting.")
-        server_socket.close()
-        return
-
-    print(f"Connection established with client {client_address}")
-
-    # Read the file into memory
-    if not os.path.exists(FILE_PATH):
-        print(f"File {FILE_PATH} does not exist. Exiting.")
-        server_socket.close()
-        return
-
+    # Open the file to be sent
     with open(FILE_PATH, "rb") as file:
-        file_data = file.read()
+        # Initialize sequence numbers and window parameters
+        next_sequence_number = 0  # Next sequence number to be used
+        window_base = 0  # Sequence number of the earliest unacknowledged byte
+        unacked_packets = {}  # Dictionary to hold unacknowledged packets
+        duplicate_ack_count = 0  # Counter for duplicate ACKs
+        last_ack_received = -1  # Last ACK received
+        eof = False  # End of file flag
 
-    # Split file into chunks
-    chunks = [file_data[i : i + MSS] for i in range(0, len(file_data), MSS)]
-    total_packets = len(chunks)
-    print(f"Total packets to send: {total_packets}")
-
-    # Initialize variables for sliding window
-    base = 0  # Next sequence number expecting ACK
-    next_seq_num = 0  # Next sequence number to send
-    unacked_packets = {}  # seq_num: (packet, send_time)
-    timers = {}  # seq_num: Timer object
-    duplicate_ack_count = {}  # seq_num: count of duplicate ACKs
-    last_ack_received = -1
-
-    while base < total_packets:
-        # Send packets within the window
-        while next_seq_num < base + WINDOW_SIZE and next_seq_num < total_packets:
-            packet = create_packet(next_seq_num, chunks[next_seq_num])
-            server_socket.sendto(packet, client_address)
-            send_time = time.time()
-            unacked_packets[next_seq_num] = (packet, send_time)
-            print(f"Sent packet {next_seq_num}")
-            # Start a timer for the packet
-            timers[next_seq_num] = Timer(
-                INITIAL_TIMEOUT,
-                timeout_handler,
-                [
-                    server_socket,
-                    client_address,
-                    next_seq_num,
-                    unacked_packets,
-                    timers,
-                    enable_fast_recovery,
-                ],
-            )
-            timers[next_seq_num].start()
-            next_seq_num += 1
-
-        try:
-            server_socket.settimeout(INITIAL_TIMEOUT)
-            ack_packet, _ = server_socket.recvfrom(1024)
-            ack_seq_num = parse_ack(ack_packet)
-
-            if ack_seq_num is None:
-                print("Received malformed ACK. Ignoring.")
-                continue
-
-            print(f"Received ACK for packet {ack_seq_num}")
-
-            if ack_seq_num > last_ack_received:
-                # New ACK received
-                last_ack_received = ack_seq_num
-                base = ack_seq_num + 1  # Slide the window
-                print(f"Sliding window. New base: {base}")
-
-                # Cancel timers for acknowledged packets
-                for seq in list(unacked_packets):
-                    if seq <= ack_seq_num:
-                        if seq in timers:
-                            timers[seq].cancel()
-                            del timers[seq]
-                        del unacked_packets[seq]
-                        if seq in duplicate_ack_count:
-                            del duplicate_ack_count[seq]
-            else:
-                # Duplicate ACK received
-                if enable_fast_recovery:
-                    if ack_seq_num in duplicate_ack_count:
-                        duplicate_ack_count[ack_seq_num] += 1
+        # Start the file transmission
+        while True:
+            # Establish connection with client if not already done
+            if not client_address:
+                print("Waiting for client connection...")
+                try:
+                    server_socket.settimeout(2)
+                    data, client_address = server_socket.recvfrom(1024)
+                    if data == b"START":
+                        print(f"Connection established with client {client_address}")
+                        # Send acknowledgment to client
+                        server_socket.sendto(b"ACK_START", client_address)
                     else:
-                        duplicate_ack_count[ack_seq_num] = 1
+                        continue
+                except socket.timeout:
+                    # Keep waiting for client's START message
+                    continue
+
+            # Send packets within the window
+            while next_sequence_number < window_base + WINDOW_SIZE * MSS and not eof:
+                # Read data from file
+                file.seek(next_sequence_number)
+                data_chunk = file.read(MSS)
+                if not data_chunk:
+                    # End of file reached
+                    eof = True
+                    break
+
+                # Create and send the packet
+                packet = create_packet(next_sequence_number, data_chunk)
+                server_socket.sendto(packet, client_address)
+                unacked_packets[next_sequence_number] = {
+                    "packet": packet,
+                    "send_time": time.time(),
+                }
+                print(f"Sent packet with sequence number {next_sequence_number}")
+                next_sequence_number += len(data_chunk)
+
+            # Wait for ACKs and handle retransmissions
+            try:
+                # Set socket timeout using adaptive timeout interval
+                server_socket.settimeout(timeout_interval)
+
+                # Receive ACK from client
+                ack_packet, _ = server_socket.recvfrom(1024)
+                ack_sequence_number = get_sequence_number_from_ack(ack_packet)
+
+                # Calculate sample RTT
+                if ack_sequence_number in unacked_packets:
+                    sample_rtt = (
+                        time.time() - unacked_packets[ack_sequence_number]["send_time"]
+                    )
+                    # Update estimated RTT and dev RTT
+                    estimated_rtt = (1 - ALPHA) * estimated_rtt + ALPHA * sample_rtt
+                    dev_rtt = (1 - BETA) * dev_rtt + BETA * abs(
+                        sample_rtt - estimated_rtt
+                    )
+                    # Update timeout interval
+                    timeout_interval = estimated_rtt + 4 * dev_rtt
+                    print(f"Updated timeout interval: {timeout_interval:.4f} seconds")
+
+                if ack_sequence_number > window_base:
+                    # Cumulative ACK received, slide the window
                     print(
-                        f"Duplicate ACK count for packet {ack_seq_num}: {duplicate_ack_count[ack_seq_num]}"
+                        f"Received cumulative ACK for sequence number {ack_sequence_number - 1}"
+                    )
+                    window_base = ack_sequence_number
+                    last_ack_received = ack_sequence_number
+                    # Remove acknowledged packets from the buffer
+                    for seq in list(unacked_packets):
+                        if seq < ack_sequence_number:
+                            del unacked_packets[seq]
+                    duplicate_ack_count = 0  # Reset duplicate ACK count
+                elif ack_sequence_number == last_ack_received:
+                    # Duplicate ACK received
+                    duplicate_ack_count += 1
+                    print(
+                        f"Received duplicate ACK for sequence number {ack_sequence_number - 1}, count={duplicate_ack_count}"
                     )
 
-                    if duplicate_ack_count[ack_seq_num] == DUP_ACK_THRESHOLD:
-                        print("DUP_ACK_THRESHOLD reached. Initiating fast retransmit.")
-                        # Retransmit the missing packet
+                    if (
+                        enable_fast_recovery
+                        and duplicate_ack_count >= DUP_ACK_THRESHOLD
+                    ):
+                        print("Fast recovery triggered")
                         fast_recovery(
                             server_socket,
                             client_address,
+                            ack_sequence_number,
                             unacked_packets,
-                            timers,
-                            duplicate_ack_count,
-                            enable_fast_recovery,
                         )
-        except socket.timeout:
-            print(
-                "Socket timeout occurred. Initiating retransmission of all unacked packets."
-            )
-            # Retransmit all unacknowledged packets
-            for seq_num in list(unacked_packets):
-                server_socket.sendto(unacked_packets[seq_num][0], client_address)
-                print(f"Retransmitted packet {seq_num}")
-                # Restart timer
-                if seq_num in timers:
-                    timers[seq_num].cancel()
-                timers[seq_num] = Timer(
-                    INITIAL_TIMEOUT,
-                    timeout_handler,
-                    [
-                        server_socket,
-                        client_address,
-                        seq_num,
-                        unacked_packets,
-                        timers,
-                        enable_fast_recovery,
-                    ],
+                        duplicate_ack_count = 0  # Reset after fast recovery
+                else:
+                    # Old ACK received, ignore
+                    print(
+                        f"Received old ACK for sequence number {ack_sequence_number - 1}, ignoring"
+                    )
+            except socket.timeout:
+                # Timeout occurred, retransmit unacknowledged packets
+                print("Timeout occurred, retransmitting unacknowledged packets")
+                retransmit_unacked_packets(
+                    server_socket, client_address, unacked_packets
                 )
-                timers[seq_num].start()
+                # Adjust timeout_interval if needed (e.g., exponential backoff)
+                timeout_interval = min(timeout_interval * 2, 4)  # Cap at 4 seconds
+                print(
+                    f"Increased timeout interval to {timeout_interval:.4f} seconds due to timeout"
+                )
 
-    # After all packets are acknowledged, send END signal
-    server_socket.sendto(END_SIGNAL, client_address)
-    print("Sent END signal to client.")
-
-    # Optionally wait for final ACK
-    try:
-        server_socket.settimeout(2)
-        ack_packet, _ = server_socket.recvfrom(1024)
-        ack_seq_num = parse_ack(ack_packet)
-        if ack_seq_num == total_packets - 1:
-            print("Received final ACK from client.")
-    except socket.timeout:
-        print("Did not receive final ACK from client.")
-
-    # Clean up
-    server_socket.close()
-    print("File transfer complete. Server socket closed.")
+            # Check if all data has been sent and acknowledged
+            if eof and not unacked_packets:
+                # Send EOF packet to client
+                eof_packet = create_packet(next_sequence_number, b"EOF")
+                server_socket.sendto(eof_packet, client_address)
+                print("File transfer complete")
+                break
 
 
-def create_packet(seq_num, data):
+def create_packet(sequence_number, data):
     """
     Create a packet with the sequence number and data.
-    Packet format: seq_num|data
+    Packet structure:
+    {
+        'sequence_number': Sequence number of the packet (byte offset),
+        'data_length': Length of the data,
+        'data': Data encoded as a string
+    }
     """
-    header = f"{seq_num}|".encode()
-    packet = header + data
-    return packet
+    packet_dict = {
+        "sequence_number": sequence_number,
+        "data_length": len(data),
+        "data": data.decode("latin1"),  # Use latin1 to preserve binary data
+    }
+    packet_json = json.dumps(packet_dict)
+    return packet_json.encode("utf-8")
 
 
-def parse_ack(ack_packet):
+def get_sequence_number_from_ack(ack_packet):
     """
-    Parse the ACK packet to extract the acknowledged sequence number.
-    ACK format: seq_num|ACK
+    Extract the next expected sequence number from the ACK packet.
+    ACK packet structure:
+    {
+        'next_sequence_number': Next expected sequence number (byte offset)
+    }
     """
-    try:
-        header, ack = ack_packet.split(b"|", 1)
-        if ack != b"ACK":
-            print(f"Malformed ACK packet: {ack_packet}")
-            return None
-        seq_num = int(header.decode())
-        return seq_num
-    except ValueError:
-        print(f"Error parsing ACK packet: {ack_packet}")
-        return None
+    ack_json = ack_packet.decode("utf-8")
+    ack_dict = json.loads(ack_json)
+    return ack_dict["next_sequence_number"]
 
 
-def timeout_handler(
-    server_socket,
-    client_address,
-    seq_num,
-    unacked_packets,
-    timers,
-    enable_fast_recovery,
-):
+def retransmit_unacked_packets(server_socket, client_address, unacked_packets):
     """
-    Handle packet timeout by retransmitting the packet.
+    Retransmit all unacknowledged packets.
     """
-    if seq_num in unacked_packets:
-        print(f"Timeout for packet {seq_num}. Retransmitting.")
-        server_socket.sendto(unacked_packets[seq_num][0], client_address)
-        # Restart timer
-        timers[seq_num] = Timer(
-            INITIAL_TIMEOUT,
-            timeout_handler,
-            [
-                server_socket,
-                client_address,
-                seq_num,
-                unacked_packets,
-                timers,
-                enable_fast_recovery,
-            ],
+    for sequence_number, packet_info in unacked_packets.items():
+        server_socket.sendto(packet_info["packet"], client_address)
+        unacked_packets[sequence_number]["send_time"] = time.time()
+        print(f"Retransmitted packet with sequence number {sequence_number}")
+
+
+def fast_recovery(server_socket, client_address, ack_sequence_number, unacked_packets):
+    """
+    Retransmit the missing packet upon receiving 3 duplicate ACKs.
+    """
+    if ack_sequence_number in unacked_packets:
+        packet_info = unacked_packets[ack_sequence_number]
+        server_socket.sendto(packet_info["packet"], client_address)
+        unacked_packets[ack_sequence_number]["send_time"] = time.time()
+        print(f"Fast retransmitted packet with sequence number {ack_sequence_number}")
+    else:
+        print(
+            f"No unacknowledged packet with sequence number {ack_sequence_number} found for fast recovery"
         )
-        timers[seq_num].start()
-
-
-def fast_recovery(
-    server_socket,
-    client_address,
-    unacked_packets,
-    timers,
-    duplicate_ack_count,
-    enable_fast_recovery,
-):
-    """
-    Implement fast recovery by retransmitting the missing packet.
-    """
-    if unacked_packets:
-        # Find the smallest sequence number in the unacked_packets
-        missing_seq = min(unacked_packets.keys())
-
-        # Retransmit the missing packet
-        server_socket.sendto(unacked_packets[missing_seq][0], client_address)
-        print(f"Fast recovery: Retransmitted packet {missing_seq}")
-
-        # Restart timer for the retransmitted packet
-        if missing_seq in timers:
-            timers[missing_seq].cancel()
-
-        timers[missing_seq] = Timer(
-            INITIAL_TIMEOUT,
-            timeout_handler,
-            [
-                server_socket,
-                client_address,
-                missing_seq,
-                unacked_packets,
-                timers,
-                enable_fast_recovery,
-            ],
-        )
-        timers[missing_seq].start()
 
 
 # Parse command-line arguments
@@ -278,10 +222,10 @@ parser = argparse.ArgumentParser(description="Reliable file transfer server over
 parser.add_argument("server_ip", help="IP address of the server")
 parser.add_argument("server_port", type=int, help="Port number of the server")
 parser.add_argument(
-    "fast_recovery", type=int, help="Enable fast recovery (1 for Yes, 0 for No)"
+    "fast_recovery", type=int, help="Enable fast recovery (1 to enable, 0 to disable)"
 )
 
 args = parser.parse_args()
 
 # Run the server
-send_file(args.server_ip, args.server_port, args.fast_recovery == 1)
+send_file(args.server_ip, args.server_port, args.fast_recovery)
