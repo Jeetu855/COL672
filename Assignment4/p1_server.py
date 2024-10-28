@@ -4,7 +4,7 @@ import socket
 import time
 
 # Constants
-MSS = 700  # Maximum Segment Size for each packet
+MSS = 1000  # Maximum Segment Size for each packet
 WINDOW_SIZE = 5  # Number of packets in flight
 DUP_ACK_THRESHOLD = 3  # Threshold for duplicate ACKs to trigger fast recovery
 FILE_PATH = "input.txt"
@@ -75,7 +75,7 @@ def send_file(server_ip, server_port, enable_fast_recovery):
                 server_socket.sendto(packet, client_address)
                 unacked_packets[next_sequence_number] = {
                     "packet": packet,
-                    "send_time": time.time(),
+                    "send_time": time.time(), 
                 }
                 print(f"Sent packet with sequence number {next_sequence_number}")
                 next_sequence_number += len(data_chunk)
