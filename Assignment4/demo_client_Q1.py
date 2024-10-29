@@ -14,7 +14,8 @@ ALPHA = 0.125  # Smoothing factor for RTT estimation
 BETA = 0.25  # Smoothing factor for RTT variance
 INITIAL_RTT = 1.0  # Initial RTT estimate in seconds
 INITIAL_RTO = 1.0  # Initial Retransmission Timeout in seconds
-
+ack_timer = None  # Timer for delayed ACKs
+ack_lock = threading.Lock()  # Lock for ACK timing
 
 def receive_file(server_ip, server_port):
     """
@@ -31,8 +32,6 @@ def receive_file(server_ip, server_port):
     #out_of_order_buffer = {}  # Buffer to store out-of-order packets
     receive_window = {}  # Receive window buffer
     window_size = RECEIVE_WINDOW_SIZE
-    ack_timer = None  # Timer for delayed ACKs
-    ack_lock = threading.Lock()  # Lock for ACK timing
     #packet_before_expected=0
 
     # RTT and RTO estimates
@@ -264,6 +263,18 @@ def receive_file(server_ip, server_port):
         #             send_ack(client_socket, server_address, expected_sequence_number)
         #     except json.JSONDecodeError:
         #         print("Received invalid packet, ignoring.")
+def start_ack_timer():
+    global ack_timer, timer_started
+    # Lock to ensure thread-safe modification of the timer
+    with ack_lock:
+        # Cancel any existing timer if one is running
+        if ack_timer is not None:
+            ack_timer.cancel()
+
+        # Start a new timer
+        ack_timer = threading.Timer(ACK_DELAY, send_ack)
+        ack_timer.start()
+        timer_started = True
 
 
 def print_json_packet(packet):
